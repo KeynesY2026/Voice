@@ -6,8 +6,12 @@ requires-python = ">=3.10,<3.12"
 dependencies = [
     "gradio==5.45.0",
     "imageio-ffmpeg==0.8.1",
-    "indextts @ git+https://github.com/index-tts/index-tts.git@d9e41aac89fd00b3d71497fddb287b7f24613712",
+    "indextts @ https://github.com/index-tts/index-tts/archive/d9e41aac89fd00b3d71497fddb287b7f24613712.zip",
 ]
+
+[project.optional-dependencies]
+cpu = ["torch==2.8.*", "torchaudio==2.8.*"]
+gpu = ["torch==2.8.*", "torchaudio==2.8.*"]
 
 [project.scripts]
 voice-reader = "voice_reader.cli:main"
@@ -25,3 +29,26 @@ packages = ["src/voice_reader"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "gpu" }]]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cuda", extra = "gpu" },
+]
+torchaudio = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cuda", extra = "gpu" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

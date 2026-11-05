@@ -80,3 +80,17 @@ def test_failed_conversion_removes_partial_output_and_reports_stderr(tmp_path, m
         reference.prepare_reference(source, tmp_path / "cache")
 
     assert not list((tmp_path / "cache").glob("*.wav"))
+
+
+def test_conversion_timeout_removes_partial_output_and_reports_error(tmp_path, monkeypatch):
+    source = tmp_path / "voice.m4a"
+    source.write_bytes(b"sample")
+
+    def run(command, **kwargs):
+        Path(command[-1]).write_bytes(b"partial")
+        raise reference.subprocess.TimeoutExpired(command, 120)
+
+    monkeypatch.setattr(reference.subprocess, "run", run)
+    with pytest.raises(RuntimeError, match="timed out"):
+        reference.prepare_reference(source, tmp_path / "cache")
+    assert not list((tmp_path / "cache").glob("*.wav"))

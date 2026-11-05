@@ -11,11 +11,15 @@ class FakeSpeechEngine:
     instances: ClassVar[list] = []
     failure: ClassVar[Exception | None] = None
 
-    def __init__(self):
+    def __init__(self, *, device="auto"):
+        from voice_reader.device import DeviceInfo
+        self.device = device
+        self.device_info = DeviceInfo(device, "cpu", "CPU", "Test CPU")
         self.calls = []
         self.instances.append(self)
 
-    def synthesize(self, text, output_path, emotion):
+    def synthesize(self, text, output_path, emotion, *, profile_id=None):
+        self.profile_id = profile_id
         self.calls.append((text, Path(output_path), emotion))
         if self.failure:
             raise self.failure
@@ -87,3 +91,48 @@ def test_cli_reports_generation_failure_with_nonzero_exit(capsys):
 
     assert result == 1
     assert "model failed" in capsys.readouterr().err
+
+
+def test_cli_passes_profile_and_device(tmp_path):
+    assert cli.main(["speak", "--text", "Hello.", "--profile", "chosen-id", "--device", "cpu"]) == 0
+    speech = FakeSpeechEngine.instances[0]
+    assert speech.profile_id == "chosen-id"
+    assert speech.device == "cpu"
+
+
+def test_cli_profile_lifecycle_without_model(tmp_path, monkeypatch, capsys):
+    import wave
+
+    from voice_reader.profiles import ProfileStore
+
+    source = tmp_path / "input.wav"
+    with wave.open(str(source), "wb") as wav:
+        wav.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
+        wav.writeframes(b"\0\0" * 72000)
+    store = ProfileStore(tmp_path / "profiles")
+    monkeypatch.setattr(cli, "ProfileStore", lambda: store, raising=False)
+    assert cli.main(["profiles", "create", "--name", "Voice", "--audio", str(source)]) == 0
+    profile = store.list_profiles()[0]
+    assert profile.id in capsys.readouterr().out
+    assert cli.main(["profiles", "list"]) == 0
+    assert "Voice" in capsys.readouterr().out
+    assert cli.main(["profiles", "rename", profile.id, "--name", "Renamed"]) == 0
+    assert store.get(profile.id).name == "Renamed"
+    assert cli.main(["profiles", "delete", profile.id]) == 1
+    assert store.get(profile.id).name == "Renamed"
+    assert cli.main(["profiles", "delete", profile.id, "--yes"]) == 0
+    assert store.list_profiles() == []
+    assert not FakeSpeechEngine.instances
+
+
+def test_cli_model_stdout_does_not_pollute_output_path(tmp_path, capsys, monkeypatch):
+    def noisy_synthesis(self, text, output_path, emotion, *, profile_id=None):
+        print("upstream model diagnostic")
+        return Path(output_path)
+
+    monkeypatch.setattr(FakeSpeechEngine, "synthesize", noisy_synthesis)
+    output = tmp_path / "output.wav"
+    assert cli.main(["speak", "--text", "Hi.", "--output", str(output)]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == str(output)
+    assert "upstream model diagnostic" in captured.err
