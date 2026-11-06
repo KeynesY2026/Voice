@@ -31,6 +31,8 @@ packages = ["src/voice_reader"]
 allow-direct-references = true
 
 [tool.uv]
+index-url = "https://mirrors.aliyun.com/pypi/simple"
+default-groups = []
 conflicts = [[{ extra = "cpu" }, { extra = "gpu" }]]
 
 [tool.uv.sources]
@@ -45,10 +47,10 @@ torchaudio = [
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
+url = "https://mirror.sjtu.edu.cn/pytorch-wheels/cpu"
 explicit = true
 
 [[tool.uv.index]]
 name = "pytorch-cuda"
-url = "https://download.pytorch.org/whl/cu128"
+url = "https://mirror.sjtu.edu.cn/pytorch-wheels/cu128"
 explicit = true

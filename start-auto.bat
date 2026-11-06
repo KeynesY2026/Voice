@@ -16,8 +16,8 @@ if exist ".venv-gpu\Scripts\python.exe" (
     for /d %%D in (".venv\Lib\site-packages\torch-*+cu*.dist-info") do set "VOICE_EXTRA=gpu"
 ) else (
     echo No installed Python environment was found.
-    echo First run: uv sync --extra gpu --group dev
-    echo Or for CPU: uv sync --extra cpu --group dev
+    echo First install runtime dependencies using the matching install guide.
+    echo Complete the model prefetch before starting generation.
     pause
     exit /b 1
 )
@@ -29,13 +29,17 @@ if errorlevel 1 (
     exit /b 1
 )
 
+rem Do not allow first-generation model downloads; prefetch models before launch.
+set "HF_HUB_OFFLINE=1"
+set "USE_MODELSCOPE=false"
+
 echo Starting Local Voice Reader with automatic device selection.
 echo Environment: %UV_PROJECT_ENVIRONMENT% ^(%VOICE_EXTRA%^)
 echo Open http://127.0.0.1:7860 after the server starts.
 echo Keep this window open while using the app; close it to stop.
 echo.
 
-call uv run --extra %VOICE_EXTRA% voice-reader-web --device auto
+call uv run --no-sync --no-dev --extra %VOICE_EXTRA% voice-reader-web --device auto
 set "VOICE_EXIT_CODE=%ERRORLEVEL%"
 if not "%VOICE_EXIT_CODE%"=="0" (
     echo.

@@ -30,9 +30,11 @@ def run_launcher(tmp_path, *, environments=(), uv_exit=0, provide_uv=True, cuda_
     if provide_uv:
         (bin_dir / "uv.cmd").write_text(
             "@echo off\n"
-            "echo cwd=%CD% > \"%LAUNCH_TEST_OUTPUT%\"\n"
-            "echo environment=%UV_PROJECT_ENVIRONMENT% >> \"%LAUNCH_TEST_OUTPUT%\"\n"
-            "echo arguments=%* >> \"%LAUNCH_TEST_OUTPUT%\"\n"
+            "echo cwd=%CD%>\"%LAUNCH_TEST_OUTPUT%\"\n"
+            "echo environment=%UV_PROJECT_ENVIRONMENT%>>\"%LAUNCH_TEST_OUTPUT%\"\n"
+            "echo arguments=%*>>\"%LAUNCH_TEST_OUTPUT%\"\n"
+            "echo hf_hub_offline=%HF_HUB_OFFLINE% >> \"%LAUNCH_TEST_OUTPUT%\"\n"
+            "echo use_modelscope=%USE_MODELSCOPE%>>\"%LAUNCH_TEST_OUTPUT%\"\n"
             f"exit /b {uv_exit}\n",
             encoding="ascii",
         )
@@ -50,7 +52,7 @@ def run_launcher(tmp_path, *, environments=(), uv_exit=0, provide_uv=True, cuda_
         timeout=15,
         check=False,
     )
-    invocation = output.read_text(encoding="ascii").splitlines() if output.exists() else []
+    invocation = [line.rstrip() for line in output.read_text(encoding="ascii").splitlines()] if output.exists() else []
     return project, result, invocation
 
 
@@ -70,7 +72,9 @@ def test_launcher_starts_auto_with_installed_environment(
     assert invocation == [
         f"cwd={project}",
         f"environment={expected_environment}",
-        f"arguments=run --extra {expected_extra} voice-reader-web --device auto",
+        f"arguments=run --no-sync --no-dev --extra {expected_extra} voice-reader-web --device auto",
+        "hf_hub_offline=1",
+        "use_modelscope=false",
     ]
 
 
@@ -91,7 +95,9 @@ def test_launcher_preserves_gpu_installation_in_default_environment(tmp_path):
     assert invocation == [
         f"cwd={project}",
         "environment=.venv",
-        "arguments=run --extra gpu voice-reader-web --device auto",
+        "arguments=run --no-sync --no-dev --extra gpu voice-reader-web --device auto",
+        "hf_hub_offline=1",
+        "use_modelscope=false",
     ]
 
 
