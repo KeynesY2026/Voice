@@ -37,7 +37,7 @@ IndexTTS 源码固定在 GitHub 版本归档；模型来自 Hugging Face。当�
 
 ## 下载并预取模型
 
-在对应平台指南设置 `$Extra` 后，于项目根目录执行。主模型约 **5.5 GB**；辅助模型约 **5.3 GB**。这两步必须在生成前完成。
+在对应平台指南设置 `$Extra` 后，于项目根目录执行。主模型约 **5.5 GB**；辅助模型约 **5.3 GB**。这两步必须在生成前完成。`checkpoints/config.yaml` 和主模型权重是所有运行模式共同依赖的模型文件，不会由 `uv sync` 安装；应用会从当前项目目录读取它们。
 
 ```powershell
 $env:HF_ENDPOINT = "https://huggingface.co"
