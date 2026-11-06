@@ -11,8 +11,9 @@ Set-Location C:\src\Voice2
 $Extra = "cpu"
 uv sync --extra $Extra --no-dev
 
-$env:HF_ENDPOINT = "https://huggingface.co"
+$env:HF_ENDPOINT = "https://hf-mirror.com"
 $env:HF_HUB_DISABLE_XET = "1"
+$env:USE_MODELSCOPE = "true"
 uv run --no-sync --no-dev --extra $Extra hf download IndexTeam/IndexTTS-2.5 --local-dir checkpoints --max-workers 4
 uv run --no-sync --no-dev --extra $Extra python -c "from indextts.utils.model_download import ensure_models_available; ensure_models_available('checkpoints')"
 ```

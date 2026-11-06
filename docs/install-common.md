@@ -26,22 +26,25 @@ uv python find 3.11
 
 ## 国内镜像与上游下载源
 
-项目已配置：
+项目要求使用国内镜像：
 
 - 阿里云 PyPI：普通 Python 依赖。
 - SJTU PyTorch wheel 镜像：项目自动选择所需的 wheel。
+- `hf-mirror.com`：主模型下载镜像。
+- ModelScope：辅助模型下载源；设置 `USE_MODELSCOPE=true` 强制使用，单文件下载失败时上游下载器会回退到 `hf-mirror.com`。
 
-正常执行 `uv sync` 时会按 `uv.lock` 使用这些地址，不需要额外索引参数。项目默认不安装 pytest 等开发依赖；安装命令也显式使用 `--no-dev`。若修改依赖或镜像地址，请重新运行 `uv lock`，并检查 `uv.lock` 中解析出的来源。
+正常执行 `uv sync` 时，PyPI 和 PyTorch 会按 `uv.lock` 使用国内镜像，不需要额外索引参数。项目默认不安装 pytest 等开发依赖；安装命令也显式使用 `--no-dev`。若修改依赖或镜像地址，请重新运行 `uv lock`，并检查 `uv.lock` 中解析出的来源。
 
-IndexTTS 源码固定在 GitHub 版本归档；模型来自 Hugging Face。当前依赖版本使用 `hf-mirror.com` 曾遇到元数据错误。若镜像下载失败，使用下文的官方 endpoint。上游辅助模型下载器会自行尝试 ModelScope；只有资源缺失时才会访问模型源。
+IndexTTS 源码仍固定从 GitHub 版本归档安装；该直接依赖未配置国内镜像。模型下载必须使用上述国内镜像，不要切换到 `huggingface.co`。
 
 ## 下载并预取模型
 
 在对应平台指南设置 `$Extra` 后，于项目根目录执行。主模型约 **5.5 GB**；辅助模型约 **5.3 GB**。这两步必须在生成前完成。`checkpoints/config.yaml` 和主模型权重是所有运行模式共同依赖的模型文件，不会由 `uv sync` 安装；应用会从当前项目目录读取它们。
 
 ```powershell
-$env:HF_ENDPOINT = "https://huggingface.co"
+$env:HF_ENDPOINT = "https://hf-mirror.com"
 $env:HF_HUB_DISABLE_XET = "1"
+$env:USE_MODELSCOPE = "true"
 uv run --no-sync --no-dev --extra $Extra hf download IndexTeam/IndexTTS-2.5 --local-dir checkpoints --max-workers 4
 uv run --no-sync --no-dev --extra $Extra python -c "from indextts.utils.model_download import ensure_models_available; ensure_models_available('checkpoints')"
 ```
@@ -94,7 +97,7 @@ if ($Missing.Count -gt 0) {
 Write-Host "模型文件齐全。"
 ```
 
-主模型下载如果出现 `LocalEntryNotFoundError` 或 HEAD/metadata 错误，请保持 `$env:HF_HUB_DISABLE_XET = "1"`，并将 `$env:HF_ENDPOINT` 设为 `https://huggingface.co` 后重试。不要在服务运行时补下模型。
+主模型下载如果出现 `LocalEntryNotFoundError` 或 HEAD/metadata 错误，不要改用海外源；保留 `hf-mirror.com` 设置并按镜像故障处理。不要在服务运行时补下模型。
 
 ## 运行时离线
 
