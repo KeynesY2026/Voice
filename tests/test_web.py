@@ -210,7 +210,9 @@ def test_ui_has_defaults_language_device_cancel_and_browser_memory():
     assert generate.inputs[3].value == 0.4
     assert generate.inputs[5].value == "auto"
     assert isinstance(generate.inputs[6], gr.Dropdown)
-    assert generate.inputs[7].value is False
+    assert generate.inputs[7].value is True
+    assert next(block for block in app.blocks.values()
+                if isinstance(block, gr.Accordion) and block.label == "文本写法案例").open is False
     assert isinstance(next(block for block in app.blocks.values() if isinstance(block, gr.BrowserState)), gr.BrowserState)
     assert callback(app, "cancel_generation")() == "生成已取消，下次生成将重新加载模型。"
     restore = callback(app, "restore_inputs")
@@ -219,7 +221,7 @@ def test_ui_has_defaults_language_device_cancel_and_browser_memory():
     assert values[3] == 0.3
     assert values[5] == "en"
     assert values[6] == "cpu"
-    assert values[7] is False
+    assert values[7] is True
     panels = [block for block in app.blocks.values() if isinstance(block, gr.Tab)]
     assert any(panel.label == "设置" for panel in panels)
     assert any(block.value and "<行|HANG2>" in str(block.value)

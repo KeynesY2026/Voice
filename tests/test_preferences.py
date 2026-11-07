@@ -32,10 +32,10 @@ def test_corrupt_browser_secret_errors_explicitly(tmp_path):
         load_browser_secret(path)
 
 
-def test_legacy_preferences_never_enable_advanced_mode():
+def test_missing_advanced_preference_uses_enabled_web_default():
     saved = dict(text="Hello.\nNext.", mode="manual", category="happy", strength=0.8)
     restored, _ = restore_preferences(saved, {"builtin-male"}, {"auto", "cpu"})
-    assert restored["advanced"] is False
+    assert restored["advanced"] is True
     assert restored["strength"] == 0.8
 
 
@@ -43,5 +43,13 @@ def test_advanced_preference_requires_boolean():
     restored, warning = restore_preferences(
         dict(DEFAULT_PREFERENCES, advanced="false"), {"builtin-male"}, {"auto", "cpu"},
     )
-    assert restored["advanced"] is False
+    assert restored["advanced"] is True
     assert "advanced" in warning
+
+
+def test_explicit_saved_advanced_off_is_preserved():
+    restored, warning = restore_preferences(
+        dict(DEFAULT_PREFERENCES, advanced=False), {"builtin-male"}, {"auto", "cpu"},
+    )
+    assert restored["advanced"] is False
+    assert warning == ""

@@ -8,7 +8,7 @@ from voice_reader.language import LANGUAGE_CHOICES
 
 DEFAULT_PREFERENCES = dict(
     text="", profile="builtin-male", mode="auto", category="calm",
-    strength=0.4, language="auto", device="auto", advanced=False,
+    strength=0.4, language="auto", device="auto", advanced=True,
 )
 
 

@@ -141,11 +141,11 @@ def build_ui(engine: SpeechEngine | InferenceService, profile_store: ProfileStor
                     value="auto", label="阅读语言",
                 )
             text = gr.Textbox(label="朗读文本", lines=8, placeholder="输入要朗读的文本")
-            settings_summary = gr.Markdown("**快速模式** · 语言：自动 · 设备：自动")
+            settings_summary = gr.Markdown("**高级模式** · 语言：自动 · 设备：自动")
             advanced = gr.Checkbox(
-                value=False, label="开启高级功能（可能更慢）",
+                value=True, label="开启高级功能（可能更慢）",
             )
-            with gr.Column(visible=False) as advanced_panel:
+            with gr.Column(visible=True) as advanced_panel:
                 gr.Markdown(
                     "换行 / 多空格会分段生成，可能更慢；自动情绪会额外分析文本。"
                 )
@@ -154,7 +154,7 @@ def build_ui(engine: SpeechEngine | InferenceService, profile_store: ProfileStor
                     category = gr.Dropdown([(EMOTION_LABELS[key], key) for key in EMOTION_CATEGORIES], value="calm",
                                            label="手动情绪", interactive=False)
                     strength = gr.Slider(0.0, 1.0, value=0.4, step=0.05, label="情绪强度")
-                with gr.Accordion("文本写法案例", open=True):
+                with gr.Accordion("文本写法案例", open=False):
                     gr.Markdown(_speech_tips(), elem_classes="speech-examples")
             with gr.Row():
                 generate_button = gr.Button("生成语音", variant="primary")
@@ -171,7 +171,7 @@ def build_ui(engine: SpeechEngine | InferenceService, profile_store: ProfileStor
             gr.Markdown(_runtime_description(engine.runtime_description))
             gr.Markdown(
                 "文本、声音和配置保存在当前浏览器的同一站点，刷新后恢复；清除站点数据会清除记录。"
-                "高级功能首次默认关闭，之后恢复你上次选择的开关。取消会停止当前推理进程，"
+                "高级功能首次默认开启，之后恢复你上次选择的开关。取消会停止当前推理进程，"
                 "下次生成重新加载模型，不从取消位置续读。"
             )
         with gr.Tab("声音档案") as profiles_tab:
