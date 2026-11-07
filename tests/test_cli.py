@@ -11,9 +11,11 @@ class FakeSpeechEngine:
     instances: ClassVar[list] = []
     failure: ClassVar[Exception | None] = None
 
-    def __init__(self, *, device="auto"):
+    def __init__(self, *, device="auto", runtime="auto"):
         from voice_reader.device import DeviceInfo
         self.device = device
+        self.runtime = runtime
+        self.runtime_description = f"Runtime: {runtime}"
         self.device_info = DeviceInfo(device, "cpu", "CPU", "Test CPU")
         self.calls = []
         self.instances.append(self)
@@ -98,6 +100,11 @@ def test_cli_passes_profile_and_device(tmp_path):
     speech = FakeSpeechEngine.instances[0]
     assert speech.profile_id == "chosen-id"
     assert speech.device == "cpu"
+
+
+def test_cli_can_select_standard_runtime():
+    assert cli.main(["speak", "--text", "Hello.", "--runtime", "standard"]) == 0
+    assert FakeSpeechEngine.instances[0].runtime == "standard"
 
 
 def test_cli_profile_lifecycle_without_model(tmp_path, monkeypatch, capsys):

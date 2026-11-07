@@ -11,6 +11,7 @@ from voice_reader.profiles import ProfileStore
 class DeviceStatus:
     device_info = DeviceInfo("cpu", "cpu", "CPU", "Explicit CPU")
     profile_store = ProfileStore()
+    runtime_description = "Runtime: standard"
 
 
 def test_ui_logs_generation_errors(tmp_path, monkeypatch, caplog):
@@ -79,6 +80,26 @@ def test_web_launch_binds_only_to_loopback(monkeypatch):
     assert launches[0]["server_port"] == 7860
     assert launches[0]["share"] is False
     assert launches[0]["max_file_size"] == 100 * 1024 * 1024
+
+
+def test_web_launch_accepts_runtime_selection(monkeypatch):
+    settings = []
+
+    class App:
+        def queue(self):
+            return self
+
+        def launch(self, **kwargs):
+            pass
+
+    def create_engine(**kwargs):
+        settings.append(kwargs)
+        return DeviceStatus()
+
+    monkeypatch.setattr(web, "SpeechEngine", create_engine)
+    monkeypatch.setattr(web, "build_ui", lambda *args, **kwargs: App())
+    web.launch(["--runtime", "standard"])
+    assert settings[0]["runtime"] == "standard"
 
 
 def callback(app, name):

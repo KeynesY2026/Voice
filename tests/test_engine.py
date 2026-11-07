@@ -48,6 +48,26 @@ def test_auto_synthesis_loads_model_once_and_uses_text_emotion(tmp_path, monkeyp
     assert calls[0]["lang"] == "EN"
 
 
+def test_runtime_selection_reaches_loaded_model_and_status(tmp_path, monkeypatch):
+    class Model:
+        def __init__(self, *, runtime, **kwargs):
+            self.runtime = runtime
+
+        def infer(self, **kwargs):
+            Path(kwargs["output_path"]).write_bytes(b"wav")
+
+    monkeypatch.setattr(engine, "_load_index_tts", lambda: Model)
+    monkeypatch.setattr(engine, "prepare_reference", lambda *args: tmp_path / "reference.wav")
+    speech = engine.SpeechEngine(runtime="standard")
+    speech.synthesize("Hello.", tmp_path / "speech.wav")
+    assert "standard" in speech.runtime_description
+
+
+def test_invalid_runtime_is_rejected_before_loading():
+    with pytest.raises(ValueError, match="runtime"):
+        engine.SpeechEngine(runtime="invalid")
+
+
 def test_manual_synthesis_passes_selected_emotion_vector_and_strength(tmp_path, monkeypatch):
     calls = []
 
@@ -76,6 +96,103 @@ def test_manual_synthesis_passes_selected_emotion_vector_and_strength(tmp_path, 
     assert calls[0]["emo_vector"] == [0, 0, 0, 0, 0, 0, 1, 0]
     assert calls[0]["emo_alpha"] == 0.4
     assert "use_emo_text" not in calls[0]
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("automatic", [False, True])
+@pytest.mark.parametrize("separator,pause_frames", [
+    ("\r\n \r\n", 12000), ("\n", 12000), ("\r", 12000),
+    ("  ", 4800), ("   ", 7200), ("    ", 9600), ("     ", 12000),
+    ("      ", 14400), ("  \n  ", 12000), ("\n  ", 12000),
+    ("      \n  ", 14400),
+])
+def test_explicit_breaks_generate_independently_with_exact_pause(
+    tmp_path, monkeypatch, device, automatic, separator, pause_frames,
+):
+    import wave
+
+    calls = []
+    instances = []
+
+    class Model:
+        def __init__(self, **kwargs):
+            instances.append(kwargs)
+
+        def infer(self, **kwargs):
+            calls.append(kwargs)
+            value = b"\x01\x00" if len(calls) == 1 else b"\x02\x00"
+            with wave.open(kwargs["output_path"], "wb") as wav:
+                wav.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
+                wav.writeframes(value * 240)
+
+    monkeypatch.setattr(engine, "_load_index_tts", lambda: Model)
+    monkeypatch.setattr(engine, "prepare_reference", lambda *args: tmp_path / "reference.wav")
+    speech = engine.SpeechEngine(device=device)
+    emotion = EmotionSettings() if automatic else EmotionSettings(
+        mode="manual", vector=(0, 0, 0, 0, 0, 0, 0, 1), strength=0.4,
+    )
+    output = speech.synthesize(f" \r\nplanner's R.{separator}Fits require three minutes.\n ",
+                               tmp_path / "joined.wav", emotion)
+    assert [call["text"] for call in calls] == ["planner's R.", "Fits require three minutes."]
+    assert len(instances) == 1
+    assert all(call["emo_alpha"] == emotion.strength for call in calls)
+    assert all(call.get("use_emo_text", False) == automatic for call in calls)
+    assert all(call["spk_audio_prompt"] == str(tmp_path / "reference.wav") for call in calls)
+    with wave.open(str(output), "rb") as wav:
+        assert wav.getnframes() == 480 + pause_frames
+        assert wav.readframes(480 + pause_frames) == (
+            b"\x01\x00" * 240 + b"\x00\x00" * pause_frames + b"\x02\x00" * 240
+        )
+    assert not list(tmp_path.glob(".paragraphs-*"))
+
+
+@pytest.mark.parametrize("failure", ["error", "missing", "rate", "invalid", "empty"])
+def test_failed_paragraph_never_returns_partial_audio(tmp_path, monkeypatch, failure):
+    import wave
+
+    calls = []
+
+    class Model:
+        def __init__(self, **kwargs):
+            pass
+
+        def infer(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 2:
+                if failure == "error":
+                    raise RuntimeError("second paragraph failed")
+                if failure == "missing":
+                    return
+                if failure == "invalid":
+                    Path(kwargs["output_path"]).write_bytes(b"bad")
+                    return
+            rate = 22050 if failure == "rate" and len(calls) == 2 else 24000
+            with wave.open(kwargs["output_path"], "wb") as wav:
+                wav.setparams((1, 2, rate, 0, "NONE", "not compressed"))
+                wav.writeframes(b"" if failure == "empty" and len(calls) == 2 else b"\x01\x00" * 240)
+
+    monkeypatch.setattr(engine, "_load_index_tts", lambda: Model)
+    monkeypatch.setattr(engine, "prepare_reference", lambda *args: tmp_path / "reference.wav")
+    output = tmp_path / "joined.wav"
+    with pytest.raises(RuntimeError):
+        engine.SpeechEngine().synthesize("First.\nSecond.", output)
+    assert not output.exists()
+    assert not list(tmp_path.glob(".paragraphs-*"))
+
+
+def test_paragraph_join_preserves_stereo_unsigned_pcm(tmp_path):
+    import wave
+
+    paths = [tmp_path / "first.wav", tmp_path / "second.wav"]
+    for path in paths:
+        with wave.open(str(path), "wb") as wav:
+            wav.setparams((2, 1, 1000, 0, "NONE", "not compressed"))
+            wav.writeframes(b"\x90\x70" * 10)
+    output = tmp_path / "joined.wav"
+    engine._join_paragraph_audio(paths, output, [0.3])
+    with wave.open(str(output), "rb") as wav:
+        assert wav.getparams()[:4] == (2, 1, 1000, 320)
+        assert wav.readframes(320) == b"\x90\x70" * 10 + b"\x80\x80" * 300 + b"\x90\x70" * 10
 
 
 @pytest.mark.parametrize(

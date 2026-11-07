@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import math
+import re
 import threading
+import wave
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from indextts.infer_v2_5 import IndexTTS2
+    from voice_reader.model import ConfiguredIndexTTS
 
 from voice_reader.config import CACHE_DIR, CHECKPOINT_DIR, DEFAULT_REFERENCE
-from voice_reader.device import DeviceInfo, DeviceMode, resolve_device
+from voice_reader.device import DeviceInfo, DeviceMode, RuntimeMode, resolve_device
 from voice_reader.profiles import ProfileStore
 from voice_reader.reference import prepare_reference
 
@@ -26,7 +29,29 @@ EMOTION_CATEGORIES = (
 )
 
 
-def _load_index_tts() -> type[IndexTTS2]:
+def _join_paragraph_audio(paths: list[Path], output: Path, pauses: list[float]) -> None:
+    with wave.open(str(paths[0]), "rb") as first:
+        channels, width, rate, _, compression, _ = first.getparams()
+    if compression != "NONE" or width not in {1, 2, 3, 4}:
+        raise RuntimeError("Paragraph audio must use uncompressed PCM.")
+    silence_byte = b"\x80" if width == 1 else b"\x00"
+    with wave.open(str(output), "wb") as joined:
+        joined.setparams((channels, width, rate, 0, "NONE", "not compressed"))
+        for index, path in enumerate(paths):
+            with wave.open(str(path), "rb") as source:
+                if (source.getnchannels(), source.getsampwidth(), source.getframerate(),
+                    source.getcomptype()) != (channels, width, rate, compression):
+                    raise RuntimeError("Paragraph audio formats do not match.")
+                if source.getnframes() == 0:
+                    raise RuntimeError("Paragraph generation returned empty audio.")
+                if index:
+                    pause = silence_byte * (channels * width * round(rate * pauses[index - 1]))
+                    joined.writeframesraw(pause)
+                while frames := source.readframes(65536):
+                    joined.writeframesraw(frames)
+
+
+def _load_index_tts() -> type[ConfiguredIndexTTS]:
     from voice_reader.model import ConfiguredIndexTTS
 
     return ConfiguredIndexTTS
@@ -73,15 +98,19 @@ class SpeechEngine:
         cache_dir: Path = CACHE_DIR,
         device: DeviceMode = "auto",
         profile_store: ProfileStore | None = None,
+        runtime: RuntimeMode = "auto",
     ) -> None:
+        if runtime not in {"auto", "standard", "low-vram"}:
+            raise ValueError("Unsupported runtime; choose auto, standard, or low-vram.")
         self.reference_path = Path(reference_path)
         self.checkpoint_dir = Path(checkpoint_dir)
         self.cache_dir = Path(cache_dir)
         self.device = device
+        self.runtime = runtime
         self.profile_store = profile_store if profile_store is not None else ProfileStore()
         self._device_info: DeviceInfo | None = None
         self._lock = threading.RLock()
-        self._model: IndexTTS2 | None = None
+        self._model: ConfiguredIndexTTS | None = None
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -90,7 +119,21 @@ class SpeechEngine:
                 self._device_info = resolve_device(self.device)
             return self._device_info
 
-    def _get_model(self) -> IndexTTS2:
+    @property
+    def runtime_description(self) -> str:
+        with self._lock:
+            selected = self._model.runtime if self._model is not None else self.runtime
+            if selected == "low-vram":
+                budget = self._model.segment_budget if self._model is not None else 32
+                return (
+                    f"Runtime: low-vram (BF16 GPT / TF32 matmul; {budget}-token segments; "
+                    "CPU reference/emotion; resident CUDA audio models)."
+                )
+            if self._model is None:
+                return f"Runtime: {selected} (selected when the model loads)."
+            return "Runtime: standard."
+
+    def _get_model(self) -> ConfiguredIndexTTS:
         if self._model is None:
             self._model = _load_index_tts()(
                 cfg_path=str(self.checkpoint_dir / "config.yaml"),
@@ -99,6 +142,7 @@ class SpeechEngine:
                 use_qwen_emo=True,
                 device=self.device_info.resolved,
                 use_cuda_kernel=False,
+                runtime=self.runtime,
             )
         return self._model
 
@@ -141,18 +185,50 @@ class SpeechEngine:
             model = self._get_model()
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.unlink(missing_ok=True)
-            if emotion.mode == "auto":
-                model.infer(
-                    spk_audio_prompt=str(reference), text=text, lang="EN",
-                    output_path=str(output_path), emo_alpha=emotion.strength, use_emo_text=True,
-                )
+            def generate(part: str, destination: Path) -> None:
+                if emotion.mode == "auto":
+                    model.infer(
+                        spk_audio_prompt=str(reference), text=part, lang="EN",
+                        output_path=str(destination), emo_alpha=emotion.strength, use_emo_text=True,
+                    )
+                else:
+                    assert emotion.vector is not None
+                    model.infer(
+                        spk_audio_prompt=str(reference), text=part, lang="EN",
+                        output_path=str(destination), emo_alpha=emotion.strength,
+                        emo_vector=list(emotion.vector),
+                    )
+                if not destination.is_file() or not destination.stat().st_size:
+                    raise RuntimeError("IndexTTS completed without creating a non-empty WAV.")
+
+            paragraphs: list[str] = []
+            pauses: list[float] = []
+            pending_pause = 0.0
+            for index, part in enumerate(re.split(r"(\r\n|\r|\n| {2,})", text)):
+                if index % 2:
+                    pause = 0.5 if "\r" in part or "\n" in part else len(part) / 10
+                    pending_pause = max(pending_pause, pause)
+                elif part.strip():
+                    if paragraphs:
+                        pauses.append(pending_pause)
+                    paragraphs.append(part.strip())
+                    pending_pause = 0.0
+            if len(paragraphs) <= 1:
+                generate(paragraphs[0], output_path)
             else:
-                assert emotion.vector is not None
-                model.infer(
-                    spk_audio_prompt=str(reference), text=text, lang="EN",
-                    output_path=str(output_path), emo_alpha=emotion.strength,
-                    emo_vector=list(emotion.vector),
-                )
+                with TemporaryDirectory(prefix=".paragraphs-", dir=output_path.parent) as temporary:
+                    paths = []
+                    for index, paragraph in enumerate(paragraphs):
+                        print(f">> Explicit text block {index + 1}/{len(paragraphs)}: {paragraph}")
+                        path = Path(temporary) / f"{index}.wav"
+                        generate(paragraph, path)
+                        paths.append(path)
+                    joined = Path(temporary) / "joined.wav"
+                    try:
+                        _join_paragraph_audio(paths, joined, pauses)
+                    except (wave.Error, EOFError) as error:
+                        raise RuntimeError(f"Invalid paragraph WAV: {error}") from error
+                    joined.replace(output_path)
             if not output_path.is_file() or not output_path.stat().st_size:
                 raise RuntimeError("IndexTTS completed without creating a non-empty WAV.")
         return output_path

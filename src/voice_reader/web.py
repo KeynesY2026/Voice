@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from uuid import uuid4
@@ -28,12 +29,19 @@ def build_ui(engine: SpeechEngine, profile_store: ProfileStore | None = None) ->
     with gr.Blocks(title="Local Voice Reader", analytics_enabled=False, delete_cache=(86400, 86400)) as app:
         gr.Markdown("# Local Voice Reader")
         gr.Textbox(value=engine.device_info.describe(), label="Runtime device (restart to change)", interactive=False)
+        gr.Markdown(engine.runtime_description)
         profile = gr.Dropdown(
             choices=[("Default reference recording", DEFAULT_PROFILE)],
             value=DEFAULT_PROFILE, label="Voice profile", interactive=True,
         )
         with gr.Tab("Generate speech"):
             text = gr.Textbox(label="English text", lines=8, placeholder="Enter text to speak...")
+            gr.Markdown(
+                "Two or more consecutive spaces force a separate speech block: "
+                "2 spaces add 200 ms, 3 add 300 ms, and each extra space adds 100 ms. "
+                "A newline adds 500 ms. Mixed separators use the longest pause without stacking. "
+                "Single spaces do not force a break."
+            )
             mode = gr.Radio(("auto", "manual"), value="auto", label="Emotion mode")
             category = gr.Dropdown(EMOTION_CATEGORIES, value="calm", label="Manual emotion", interactive=False)
             strength = gr.Slider(0.0, 1.0, value=0.6, step=0.05, label="Emotion strength")
@@ -71,6 +79,7 @@ def build_ui(engine: SpeechEngine, profile_store: ProfileStore | None = None) ->
             text_value: str, selected_mode: str, selected_category: str, selected_strength: float,
             selected_profile: str | None = DEFAULT_PROFILE,
         ):
+            started = time.perf_counter()
             try:
                 if selected_profile is None:
                     raise ValueError("Select a voice profile or the default reference recording.")
@@ -82,7 +91,10 @@ def build_ui(engine: SpeechEngine, profile_store: ProfileStore | None = None) ->
             except (OSError, RuntimeError, ValueError) as error:
                 logger.exception("Speech generation failed.")
                 return None, f"**Generation failed:** {error}"
-            return str(output), f"Audio ready. {engine.device_info.describe()}"
+            return str(output), (
+                f"Audio ready in {time.perf_counter() - started:.1f} seconds. "
+                f"{engine.device_info.describe()} {engine.runtime_description}"
+            )
 
         def refresh_profiles(selected_profile):
             try:
@@ -156,9 +168,10 @@ def build_ui(engine: SpeechEngine, profile_store: ProfileStore | None = None) ->
 def launch(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="voice-reader-web")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--runtime", choices=("auto", "standard", "low-vram"), default="auto")
     args = parser.parse_args(argv)
     store = ProfileStore()
-    engine = SpeechEngine(device=args.device, profile_store=store)
+    engine = SpeechEngine(device=args.device, profile_store=store, runtime=args.runtime)
     try:
         app = build_ui(engine, profile_store=store)
     except (OSError, RuntimeError, ValueError) as error:

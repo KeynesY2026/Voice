@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 DeviceMode = Literal["auto", "cpu", "cuda"]
+RuntimeMode = Literal["auto", "standard", "low-vram"]
 
 
 @dataclass(frozen=True)

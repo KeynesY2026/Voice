@@ -32,6 +32,8 @@ def _build_parser() -> argparse.ArgumentParser:
     speak.add_argument("--strength", type=float, default=0.6)
     speak.add_argument("--profile", help="Saved voice profile ID (omit for the default recording)")
     speak.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    speak.add_argument("--runtime", choices=("auto", "standard", "low-vram"), default="auto",
+                       help="Automatic small-VRAM optimization, original runtime, or resident CUDA core")
     profiles = commands.add_parser("profiles", help="Manage local voice-cloning profiles")
     actions = profiles.add_subparsers(dest="action", required=True)
     create = actions.add_parser("create", help="Import a 3-30 second authorized recording")
@@ -86,10 +88,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             category,
             args.strength,
         )
-        speech = SpeechEngine(device=args.device)
+        speech = SpeechEngine(device=args.device, runtime=args.runtime)
         with redirect_stdout(sys.stderr):
             print(speech.device_info.describe(), file=sys.stderr)
             output = speech.synthesize(text, args.output, emotion, profile_id=args.profile)
+            print(speech.runtime_description, file=sys.stderr)
     except (OSError, RuntimeError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
