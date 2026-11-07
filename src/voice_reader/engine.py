@@ -13,8 +13,10 @@ if TYPE_CHECKING:
     from voice_reader.model import ConfiguredIndexTTS
 
 from voice_reader.config import CACHE_DIR, CHECKPOINT_DIR, DEFAULT_REFERENCE
+from voice_reader.builtin_profiles import BUILTIN_PROFILES
 from voice_reader.device import DeviceInfo, DeviceMode, RuntimeMode, resolve_device
 from voice_reader.profiles import ProfileStore
+from voice_reader.language import resolve_language
 from voice_reader.reference import prepare_reference
 
 EMOTION_CATEGORIES = (
@@ -61,7 +63,7 @@ def _load_index_tts() -> type[ConfiguredIndexTTS]:
 class EmotionSettings:
     mode: str = "auto"
     vector: tuple[float, ...] | None = None
-    strength: float = 0.6
+    strength: float = 0.4
 
     def validate(self) -> None:
         if self.mode not in {"auto", "manual"}:
@@ -147,6 +149,11 @@ class SpeechEngine:
         return self._model
 
     def _get_reference_audio(self, profile_id: str | None) -> Path:
+        if profile_id in BUILTIN_PROFILES:
+            reference = BUILTIN_PROFILES[profile_id].reference_path
+            if not reference.is_file():
+                raise FileNotFoundError(f"Bundled voice reference is missing: {reference}")
+            return reference
         if profile_id is not None:
             return self.profile_store.get(profile_id).reference_path
         try:
@@ -164,15 +171,23 @@ class SpeechEngine:
         emotion: EmotionSettings | None = None,
         *,
         profile_id: str | None = None,
+        language: str = "auto",
+        advanced: bool = False,
     ) -> Path:
+        if not isinstance(advanced, bool):
+            raise ValueError("Advanced mode must be a boolean.")
         if not text.strip():
             raise ValueError("Text must not be empty.")
+        if not advanced:
+            text = re.sub(r"<([^<>|]+)\|[^<>]+>", r"\1", text)
+            text = re.sub(r"\s+", " ", text).strip()
         output_path = Path(output_path)
         if output_path.suffix.lower() != ".wav":
             raise ValueError("Output path must end in .wav.")
         if emotion is None:
             emotion = EmotionSettings()
         emotion.validate()
+        resolve_language(text, language)
         with self._lock:
             resolved_output = output_path.resolve()
             if resolved_output.is_relative_to(self.profile_store.root):
@@ -185,16 +200,25 @@ class SpeechEngine:
             model = self._get_model()
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.unlink(missing_ok=True)
+            print(">> Advanced mode: explicit pauses, pronunciation and emotion controls enabled."
+                  if advanced else ">> Fast mode: no explicit pauses, pronunciation overrides or emotion analysis.")
             def generate(part: str, destination: Path) -> None:
-                if emotion.mode == "auto":
+                lang = resolve_language(part, language).upper()
+                print(f">> Reading language: {lang}")
+                if not advanced:
                     model.infer(
-                        spk_audio_prompt=str(reference), text=part, lang="EN",
+                        spk_audio_prompt=str(reference), text=part, lang=lang,
+                        output_path=str(destination),
+                    )
+                elif emotion.mode == "auto":
+                    model.infer(
+                        spk_audio_prompt=str(reference), text=part, lang=lang,
                         output_path=str(destination), emo_alpha=emotion.strength, use_emo_text=True,
                     )
                 else:
                     assert emotion.vector is not None
                     model.infer(
-                        spk_audio_prompt=str(reference), text=part, lang="EN",
+                        spk_audio_prompt=str(reference), text=part, lang=lang,
                         output_path=str(destination), emo_alpha=emotion.strength,
                         emo_vector=list(emotion.vector),
                     )

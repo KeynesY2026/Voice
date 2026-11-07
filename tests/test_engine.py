@@ -36,16 +36,106 @@ def test_auto_synthesis_loads_model_once_and_uses_text_emotion(tmp_path, monkeyp
         cache_dir=tmp_path / "cache",
     )
 
-    first = speech.synthesize("Hello there.", tmp_path / "first.wav", EmotionSettings())
-    second = speech.synthesize("How are you?", tmp_path / "second.wav", EmotionSettings())
+    first = speech.synthesize("Hello there.", tmp_path / "first.wav", EmotionSettings(), advanced=True)
+    second = speech.synthesize("How are you?", tmp_path / "second.wav", EmotionSettings(), advanced=True)
 
     assert first.read_bytes() == b"wav"
     assert second.read_bytes() == b"wav"
     assert len(instances) == 1
     assert instances[0]["use_qwen_emo"] is True
     assert calls[0]["use_emo_text"] is True
-    assert calls[0]["emo_alpha"] == 0.6
+    assert calls[0]["emo_alpha"] == 0.4
     assert calls[0]["lang"] == "EN"
+
+
+def test_language_is_resolved_per_explicit_block(tmp_path, monkeypatch):
+    import wave
+
+    calls = []
+
+    class Model:
+        def __init__(self, **kwargs):
+            pass
+
+        def infer(self, **kwargs):
+            calls.append(kwargs)
+            with wave.open(kwargs["output_path"], "wb") as wav:
+                wav.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
+                wav.writeframes(b"\0\0" * 240)
+
+    monkeypatch.setattr(engine, "_load_index_tts", lambda: Model)
+    monkeypatch.setattr(engine, "prepare_reference", lambda *args: tmp_path / "reference.wav")
+    speech = engine.SpeechEngine()
+    speech.synthesize("Hello there.\n这是中文。", tmp_path / "auto.wav", language="auto", advanced=True)
+    assert [call["lang"] for call in calls] == ["EN", "ZH"]
+    calls.clear()
+    speech.synthesize("Hello，这是混合文本。", tmp_path / "forced.wav", language="en")
+    assert calls[0]["text"] == "Hello，这是混合文本。"
+    assert calls[0]["lang"] == "EN"
+
+
+def test_emotion_strength_defaults_to_point_four():
+    assert EmotionSettings().strength == 0.4
+
+
+@pytest.mark.parametrize("emotion", [
+    EmotionSettings(),
+    EmotionSettings(mode="manual", vector=(1, 0, 0, 0, 0, 0, 0, 0), strength=0.8),
+])
+def test_default_fast_mode_ignores_explicit_breaks_annotations_and_emotion(
+    tmp_path, monkeypatch, emotion, capsys,
+):
+    calls = []
+
+    class Model:
+        def __init__(self, **kwargs):
+            pass
+
+        def infer(self, **kwargs):
+            calls.append(kwargs)
+            Path(kwargs["output_path"]).write_bytes(b"wav")
+
+    monkeypatch.setattr(engine, "_load_index_tts", lambda: Model)
+    monkeypatch.setattr(engine, "prepare_reference", lambda *args: tmp_path / "reference.wav")
+    speech = engine.SpeechEngine()
+    speech.synthesize("Read <minute|M IH1 . N AH0 T>.   Next.\nLast.", tmp_path / "fast.wav", emotion)
+    assert len(calls) == 1
+    assert calls[0]["text"] == "Read minute. Next. Last."
+    assert not calls[0].get("use_emo_text", False)
+    assert calls[0].get("emo_vector") is None
+    assert "Fast mode" in capsys.readouterr().out
+
+
+def test_advanced_mode_preserves_pronunciation_annotation(tmp_path, monkeypatch):
+    calls = []
+
+    class Model:
+        def __init__(self, **kwargs):
+            pass
+
+        def infer(self, **kwargs):
+            calls.append(kwargs)
+            Path(kwargs["output_path"]).write_bytes(b"wav")
+
+    monkeypatch.setattr(engine, "_load_index_tts", lambda: Model)
+    monkeypatch.setattr(engine, "prepare_reference", lambda *args: tmp_path / "reference.wav")
+    engine.SpeechEngine().synthesize(
+        "A <minute|M IH1 . N AH0 T>.", tmp_path / "advanced.wav", advanced=True,
+    )
+    assert calls[0]["text"] == "A <minute|M IH1 . N AH0 T>."
+    assert calls[0]["use_emo_text"] is True
+
+
+def test_built_in_profiles_use_bundled_audio_without_private_reference(monkeypatch):
+    from voice_reader.builtin_profiles import BUILTIN_PROFILES
+
+    def unexpected(*args):
+        raise AssertionError("Built-in voices must not prepare the private reference.")
+
+    monkeypatch.setattr(engine, "prepare_reference", unexpected)
+    speech = engine.SpeechEngine()
+    for profile_id, profile in BUILTIN_PROFILES.items():
+        assert speech._get_reference_audio(profile_id) == profile.reference_path
 
 
 def test_runtime_selection_reaches_loaded_model_and_status(tmp_path, monkeypatch):
@@ -91,6 +181,7 @@ def test_manual_synthesis_passes_selected_emotion_vector_and_strength(tmp_path, 
         "That is wonderful.",
         tmp_path / "manual.wav",
         EmotionSettings(mode="manual", vector=(0, 0, 0, 0, 0, 0, 1, 0), strength=0.4),
+        advanced=True,
     )
 
     assert calls[0]["emo_vector"] == [0, 0, 0, 0, 0, 0, 1, 0]
@@ -132,7 +223,7 @@ def test_explicit_breaks_generate_independently_with_exact_pause(
         mode="manual", vector=(0, 0, 0, 0, 0, 0, 0, 1), strength=0.4,
     )
     output = speech.synthesize(f" \r\nplanner's R.{separator}Fits require three minutes.\n ",
-                               tmp_path / "joined.wav", emotion)
+                               tmp_path / "joined.wav", emotion, advanced=True)
     assert [call["text"] for call in calls] == ["planner's R.", "Fits require three minutes."]
     assert len(instances) == 1
     assert all(call["emo_alpha"] == emotion.strength for call in calls)
@@ -175,7 +266,7 @@ def test_failed_paragraph_never_returns_partial_audio(tmp_path, monkeypatch, fai
     monkeypatch.setattr(engine, "prepare_reference", lambda *args: tmp_path / "reference.wav")
     output = tmp_path / "joined.wav"
     with pytest.raises(RuntimeError):
-        engine.SpeechEngine().synthesize("First.\nSecond.", output)
+        engine.SpeechEngine().synthesize("First.\nSecond.", output, advanced=True)
     assert not output.exists()
     assert not list(tmp_path.glob(".paragraphs-*"))
 

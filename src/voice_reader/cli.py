@@ -5,6 +5,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from voice_reader.config import OUTPUT_DIR
+from voice_reader.console import configure_utf8_output
 from voice_reader.engine import (
     EMOTION_CATEGORIES,
     EmotionSettings,
@@ -12,12 +13,13 @@ from voice_reader.engine import (
     make_emotion_settings,
 )
 from voice_reader.profiles import ProfileStore
+from voice_reader.language import LANGUAGE_CHOICES
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="voice-reader")
     commands = parser.add_subparsers(dest="command", required=True)
-    speak = commands.add_parser("speak", help="Generate English speech")
+    speak = commands.add_parser("speak", help="Generate speech without translating the input")
     inputs = speak.add_mutually_exclusive_group(required=True)
     inputs.add_argument("--text", help="Text to speak")
     inputs.add_argument("--text-file", type=Path, help="UTF-8 text file to speak")
@@ -27,9 +29,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--emotion",
         choices=("auto", *EMOTION_CATEGORIES),
         default="auto",
-        help="Automatic emotion detection or a manual emotion category",
+        help="Automatic emotion detection or a manual emotion category (requires --advanced)",
     )
-    speak.add_argument("--strength", type=float, default=0.6)
+    speak.add_argument("--strength", type=float, default=0.4)
+    speak.add_argument("--language", choices=[code for _, code in LANGUAGE_CHOICES], default="auto")
+    speak.add_argument("--advanced", action="store_true",
+                       help="Enable explicit pauses, pronunciation annotations and emotion controls")
     speak.add_argument("--profile", help="Saved voice profile ID (omit for the default recording)")
     speak.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     speak.add_argument("--runtime", choices=("auto", "standard", "low-vram"), default="auto",
@@ -71,11 +76,14 @@ def _manage_profiles(args: argparse.Namespace) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    configure_utf8_output()
     args = _build_parser().parse_args(argv)
     try:
         if args.command == "profiles":
             _manage_profiles(args)
             return 0
+        if not args.advanced and (args.emotion != "auto" or args.strength != 0.4):
+            raise ValueError("Emotion overrides require --advanced; fast mode uses the reference expression.")
         if args.text_file is not None:
             text = args.text_file.read_text(encoding="utf-8")
         elif args.stdin:
@@ -83,15 +91,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             text = args.text
         category = args.emotion if args.emotion != "auto" else ""
-        emotion: EmotionSettings = make_emotion_settings(
+        emotion: EmotionSettings | None = make_emotion_settings(
             "auto" if args.emotion == "auto" else "manual",
             category,
             args.strength,
-        )
+        ) if args.advanced else None
         speech = SpeechEngine(device=args.device, runtime=args.runtime)
         with redirect_stdout(sys.stderr):
             print(speech.device_info.describe(), file=sys.stderr)
-            output = speech.synthesize(text, args.output, emotion, profile_id=args.profile)
+            output = speech.synthesize(
+                text, args.output, emotion, profile_id=args.profile, language=args.language,
+                advanced=args.advanced,
+            )
             print(speech.runtime_description, file=sys.stderr)
     except (OSError, RuntimeError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)

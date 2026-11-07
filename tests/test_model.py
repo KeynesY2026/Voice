@@ -1,6 +1,49 @@
 import pytest
 
 
+@pytest.mark.parametrize("runtime", ["standard", "low-vram"])
+def test_qwen_loads_only_on_first_automatic_emotion_request(monkeypatch, runtime):
+    from types import SimpleNamespace
+
+    from indextts.infer_v2_5 import IndexTTS2
+    from voice_reader import model as module
+
+    loads = []
+
+    def initialize(self, **kwargs):
+        self.cfg = SimpleNamespace(qwen_emo_path="emotion")
+        self.qwen_emo = None
+        self.device = "cpu"
+
+    def configure(self, device):
+        self.segment_budget = 32
+
+    monkeypatch.setattr(module, "select_runtime", lambda *args: runtime)
+    monkeypatch.setattr(module.torch.cuda, "set_per_process_memory_fraction", lambda *args: None)
+    monkeypatch.setattr(IndexTTS2, "__init__", initialize)
+    monkeypatch.setattr(IndexTTS2, "infer", lambda self, *args, **kwargs: "audio")
+    monkeypatch.setattr(module.ConfiguredIndexTTS, "_configure_low_vram", configure)
+
+    def load(path, device):
+        loads.append((path, device))
+        return SimpleNamespace(model=module.nn.Linear(1, 1))
+
+    monkeypatch.setattr(module, "load_emotion_model", load)
+    model = module.ConfiguredIndexTTS(
+        cfg_path="config", model_dir="checkpoints", device="cpu",
+        use_bf16=False, use_qwen_emo=True, use_cuda_kernel=False,
+    )
+    assert loads == []
+    model.infer(text="Fast mode")
+    model.infer(text="Manual mode", emo_vector=[0] * 8)
+    assert loads == []
+    model.infer(text="Auto mode", use_emo_text=True)
+    model.infer(text="Auto mode again", use_emo_text=True)
+    assert len(loads) == 1
+    assert loads[0][1] == "cpu"
+    assert isinstance(model.qwen_emo.model, module.BoundedEmotionModel) == (runtime == "low-vram")
+
+
 def test_small_gpu_selects_resident_core_but_cpu_keeps_standard_runtime(monkeypatch):
     from types import SimpleNamespace
 

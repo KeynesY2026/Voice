@@ -20,7 +20,9 @@ class FakeSpeechEngine:
         self.calls = []
         self.instances.append(self)
 
-    def synthesize(self, text, output_path, emotion, *, profile_id=None):
+    def synthesize(self, text, output_path, emotion, *, profile_id=None, language="auto", advanced=False):
+        self.language = language
+        self.advanced = advanced
         self.profile_id = profile_id
         self.calls.append((text, Path(output_path), emotion))
         if self.failure:
@@ -41,7 +43,8 @@ def test_cli_accepts_direct_text_and_outputs_path(tmp_path, capsys):
     result = cli.main(["speak", "--text", "Hello.", "--output", str(output)])
 
     assert result == 0
-    assert FakeSpeechEngine.instances[0].calls[0] == ("Hello.", output, EmotionSettings())
+    assert FakeSpeechEngine.instances[0].calls[0] == ("Hello.", output, None)
+    assert FakeSpeechEngine.instances[0].advanced is False
     assert str(output) in capsys.readouterr().out
 
 
@@ -76,7 +79,7 @@ def test_cli_requires_exactly_one_text_source(arguments):
 
 
 def test_cli_maps_manual_emotion_to_model_vector():
-    assert cli.main(["speak", "--text", "Surprise!", "--emotion", "surprised", "--strength", "0.4"]) == 0
+    assert cli.main(["speak", "--text", "Surprise!", "--advanced", "--emotion", "surprised", "--strength", "0.4"]) == 0
 
     settings = FakeSpeechEngine.instances[0].calls[0][2]
     assert settings == EmotionSettings(
@@ -84,6 +87,13 @@ def test_cli_maps_manual_emotion_to_model_vector():
         vector=(0, 0, 0, 0, 0, 0, 1, 0),
         strength=0.4,
     )
+
+
+@pytest.mark.parametrize("extra", [["--emotion", "happy"], ["--strength", "0.8"]])
+def test_cli_rejects_emotion_override_without_advanced(extra, capsys):
+    assert cli.main(["speak", "--text", "Hello.", *extra]) == 1
+    assert "--advanced" in capsys.readouterr().err
+    assert not FakeSpeechEngine.instances
 
 
 def test_cli_reports_generation_failure_with_nonzero_exit(capsys):
@@ -105,6 +115,15 @@ def test_cli_passes_profile_and_device(tmp_path):
 def test_cli_can_select_standard_runtime():
     assert cli.main(["speak", "--text", "Hello.", "--runtime", "standard"]) == 0
     assert FakeSpeechEngine.instances[0].runtime == "standard"
+
+
+def test_cli_language_override_and_builtin_voice_reach_engine():
+    assert cli.main(["speak", "--text", "Hello.", "--language", "en",
+                     "--profile", "builtin-female"]) == 0
+    speech = FakeSpeechEngine.instances[0]
+    assert speech.language == "en"
+    assert speech.profile_id == "builtin-female"
+    assert speech.calls[0][2] is None
 
 
 def test_cli_profile_lifecycle_without_model(tmp_path, monkeypatch, capsys):
@@ -133,7 +152,7 @@ def test_cli_profile_lifecycle_without_model(tmp_path, monkeypatch, capsys):
 
 
 def test_cli_model_stdout_does_not_pollute_output_path(tmp_path, capsys, monkeypatch):
-    def noisy_synthesis(self, text, output_path, emotion, *, profile_id=None):
+    def noisy_synthesis(self, text, output_path, emotion, *, profile_id=None, language="auto", advanced=False):
         print("upstream model diagnostic")
         return Path(output_path)
 

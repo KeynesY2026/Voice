@@ -1266,6 +1266,15 @@ wheels = [
 ]
 
 [[package]]
+name = "langid"
+version = "1.1.6"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/ea/4c/0fb7d900d3b0b9c8703be316fbddffecdab23c64e1b46c7a83561d78bd43/langid-1.1.6.tar.gz", hash = "sha256:044bcae1912dab85c33d8e98f2811b8f4ff1213e5e9a9e9510137b84da2cb293" }
+
+[[package]]
 name = "lazy-loader"
 version = "0.6"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -3380,6 +3389,7 @@ dependencies = [
     { name = "gradio" },
     { name = "imageio-ffmpeg" },
     { name = "indextts" },
+    { name = "langid" },
 ]
 
 [package.optional-dependencies]
@@ -3404,6 +3414,7 @@ requires-dist = [
     { name = "gradio", specifier = "==5.45.0" },
     { name = "imageio-ffmpeg", specifier = "==0.8.1" },
     { name = "indextts", url = "https://github.com/index-tts/index-tts/archive/d9e41aac89fd00b3d71497fddb287b7f24613712.zip" },
+    { name = "langid", specifier = "==1.1.6" },
     { name = "torch", marker = "extra == 'cpu'", specifier = "==2.8.*", index = "https://mirror.sjtu.edu.cn/pytorch-wheels/cpu", conflict = { package = "voice-reader", extra = "cpu" } },
     { name = "torch", marker = "extra == 'gpu'", specifier = "==2.8.*", index = "https://mirror.sjtu.edu.cn/pytorch-wheels/cu128", conflict = { package = "voice-reader", extra = "gpu" } },
     { name = "torchaudio", marker = "extra == 'cpu'", specifier = "==2.8.*", index = "https://mirror.sjtu.edu.cn/pytorch-wheels/cpu", conflict = { package = "voice-reader", extra = "cpu" } },

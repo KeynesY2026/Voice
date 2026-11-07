@@ -155,12 +155,9 @@ class ConfiguredIndexTTS(IndexTTS2):
             self._configure_low_vram(device)
             print(">> Runtime: low-vram; BF16 GPT and FP32 audio models on CUDA; "
                   "TF32 matmul, 32-token segments, CPU reference/emotion (no weight offload).")
-        if use_qwen_emo:
-            self.qwen_emo = load_emotion_model(
-                str(Path(model_dir) / self.cfg.qwen_emo_path), "cpu" if low_vram else device,
-            )
-            if low_vram:
-                self.qwen_emo.model = BoundedEmotionModel(self.qwen_emo.model)
+        self._emotion_enabled = use_qwen_emo
+        self._emotion_path = str(Path(model_dir) / self.cfg.qwen_emo_path)
+        self._emotion_device = "cpu" if low_vram else device
 
     def _configure_low_vram(self, device: str) -> None:
         self.device = device
@@ -190,6 +187,15 @@ class ConfiguredIndexTTS(IndexTTS2):
 
     @torch.no_grad()
     def infer(self, *args, **kwargs):
+        use_emo_text = args[7] if len(args) > 7 else kwargs.get("use_emo_text", False)
+        if use_emo_text and self.qwen_emo is None:
+            if not self._emotion_enabled:
+                raise RuntimeError("Automatic emotion analysis is disabled for this model.")
+            logger.info("Loading emotion model for the first automatic emotion request.")
+            emotion = load_emotion_model(self._emotion_path, self._emotion_device)
+            if self.runtime == "low-vram":
+                emotion.model = BoundedEmotionModel(emotion.model)
+            self.qwen_emo = emotion
         if self.runtime != "low-vram":
             return super().infer(*args, **kwargs)
         requested = args[12] if len(args) > 12 else kwargs.get("max_text_tokens_per_segment", 32)

@@ -1,11 +1,12 @@
 [project]
 name = "voice-reader"
 version = "0.1.0"
-description = "Local English speech generation with IndexTTS-2.5"
+description = "Local multilingual speech generation with IndexTTS-2.5"
 requires-python = ">=3.10,<3.12"
 dependencies = [
     "gradio==5.45.0",
     "imageio-ffmpeg==0.8.1",
+    "langid==1.1.6",
     "indextts @ https://github.com/index-tts/index-tts/archive/d9e41aac89fd00b3d71497fddb287b7f24613712.zip",
 ]
 
@@ -26,6 +27,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/voice_reader"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"docs/speech-tips.md" = "voice_reader/assets/speech-tips.md"
 
 [tool.hatch.metadata]
 allow-direct-references = true

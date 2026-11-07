@@ -1,0 +1,34 @@
+{
+  "dataset": "CMU ARCTIC",
+  "license": "CMU ARCTIC voice-specific COPYING",
+  "license_file": "LICENSE-CMU-ARCTIC.txt",
+  "attribution": "Carnegie Mellon University (2003), CMU ARCTIC. See CMU-LTI-03-177.",
+  "profiles": {
+    "builtin-male": {
+      "source_corpus": "CMU ARCTIC",
+      "source_speaker": "bdl",
+      "speaker_description": "US English male",
+      "source_url": "http://festvox.org/cmu_arctic/cmu_arctic/cmu_us_bdl_arctic/wav/arctic_a0003.wav",
+      "source_license": "CMU ARCTIC voice-specific COPYING",
+      "source_license_url": "http://festvox.org/cmu_arctic/cmu_arctic/cmu_us_bdl_arctic/COPYING",
+      "transcript_url": "http://festvox.org/cmu_arctic/cmu_arctic/cmu_us_bdl_arctic/etc/txt.done.data",
+      "transcript": "For the twentieth time that evening the two men shook hands.",
+      "source_sha256": "6bf2ec5e40a8a01a690d7aa5d1aa3a1489baae614850c7a716bf00092b005028",
+      "sha256": "77a765dee0abb589820a18a9e04985d08fbb55b160feeab91d8b1e95536a17e8",
+      "resampling": "16 kHz mono PCM16 to 24 kHz mono PCM16"
+    },
+    "builtin-female": {
+      "source_corpus": "CMU ARCTIC",
+      "source_speaker": "slt",
+      "speaker_description": "US English female",
+      "source_url": "http://festvox.org/cmu_arctic/cmu_arctic/cmu_us_slt_arctic/wav/arctic_a0003.wav",
+      "source_license": "CMU ARCTIC voice-specific COPYING",
+      "source_license_url": "http://festvox.org/cmu_arctic/cmu_arctic/cmu_us_slt_arctic/COPYING",
+      "transcript_url": "http://festvox.org/cmu_arctic/cmu_arctic/cmu_us_slt_arctic/etc/txt.done.data",
+      "transcript": "For the twentieth time that evening the two men shook hands.",
+      "source_sha256": "0b32e00846e132826f46d7e5cabb2d8b370a5dc654bac0447cb63285f81cc413",
+      "sha256": "2d9e95e0de399531aa7491a26e2acac049319409f1af4095feb0453462b398f1",
+      "resampling": "16 kHz mono PCM16 to 24 kHz mono PCM16"
+    }
+  }
+}
