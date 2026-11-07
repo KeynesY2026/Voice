@@ -1,4 +1,6 @@
 import logging
+import os
+import threading
 from pathlib import Path
 
 import torch
@@ -10,6 +12,36 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from voice_reader.device import RuntimeMode
 
 logger = logging.getLogger(__name__)
+_cpu_thread_lock = threading.Lock()
+_cpu_threads: int | None = None
+
+
+def configure_cpu_threads() -> int:
+    """Apply the CPU-only intra-op heuristic once, before loading model weights."""
+    global _cpu_threads
+    with _cpu_thread_lock:
+        if _cpu_threads is not None:
+            return _cpu_threads
+        default = torch.get_num_threads()
+        logical = os.cpu_count()
+        source = next((key for key in ("MKL_NUM_THREADS", "OMP_NUM_THREADS") if key in os.environ), None)
+        if source is not None:
+            raw = os.environ[source].strip()
+            if not raw.isascii() or not raw.isdecimal() or int(raw) < 1:
+                raise ValueError(f"{source} must be a positive integer; got {raw!r}.")
+            target = int(raw)
+        else:
+            target = max(default, min(logical if logical is not None else default, (3 * default + 1) // 2))
+        torch.set_num_threads(target)
+        actual = torch.get_num_threads()
+        if actual != target:
+            raise RuntimeError(f"CPU intra-op threads did not apply: target={target}, actual={actual}.")
+        message = (f"CPU intra-op threads: default={default}, logical={logical}, "
+                   f"target={target}, actual={actual}, source={source or '1.5x heuristic'}.")
+        logger.info(message)
+        print(f">> {message}", flush=True)
+        _cpu_threads = actual
+        return actual
 
 
 class IncompleteSpeechError(RuntimeError):
@@ -142,6 +174,8 @@ class ConfiguredIndexTTS(IndexTTS2):
     ) -> None:
         self.runtime = select_runtime(device, runtime)
         low_vram = self.runtime == "low-vram"
+        if device == "cpu" and not low_vram:
+            configure_cpu_threads()
         if low_vram:
             torch.set_num_threads(min(4, torch.get_num_threads()))
             torch.cuda.set_per_process_memory_fraction(0.90, device)

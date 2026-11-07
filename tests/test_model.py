@@ -1,6 +1,101 @@
 import pytest
 
 
+@pytest.fixture
+def cpu_thread_state(monkeypatch):
+    from voice_reader import model as module
+
+    state = {"threads": 4}
+    monkeypatch.delenv("MKL_NUM_THREADS", raising=False)
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    monkeypatch.setattr(module, "_cpu_threads", None, raising=False)
+    monkeypatch.setattr(module.torch, "get_num_threads", lambda: state["threads"])
+    monkeypatch.setattr(module.torch, "set_num_threads", lambda value: state.update(threads=value))
+    monkeypatch.setattr(module.os, "cpu_count", lambda: 8)
+    return module, state
+
+
+@pytest.mark.parametrize("default,logical,target", [
+    (8, 16, 12), (4, 8, 6), (4, 4, 4), (3, 8, 5), (4, None, 4), (8, 4, 8),
+])
+def test_cpu_thread_heuristic_and_once_per_process(cpu_thread_state, default, logical, target, monkeypatch):
+    module, state = cpu_thread_state
+    state["threads"] = default
+    monkeypatch.setattr(module.os, "cpu_count", lambda: logical)
+    module.configure_cpu_threads()
+    assert state["threads"] == target
+    module.configure_cpu_threads()
+    assert state["threads"] == target
+
+
+@pytest.mark.parametrize("mkl,omp,target", [(None, "7", 7), ("9", "2", 9), ("3", None, 3)])
+def test_explicit_cpu_threads_override_actual_default(cpu_thread_state, monkeypatch, mkl, omp, target):
+    module, state = cpu_thread_state
+    if mkl is not None:
+        monkeypatch.setenv("MKL_NUM_THREADS", mkl)
+    if omp is not None:
+        monkeypatch.setenv("OMP_NUM_THREADS", omp)
+    module.configure_cpu_threads()
+    assert state["threads"] == target
+
+
+@pytest.mark.parametrize("value", ["", "bad", "0", "-1", "1.5"])
+def test_invalid_explicit_cpu_threads_fail(cpu_thread_state, monkeypatch, value):
+    module, _ = cpu_thread_state
+    monkeypatch.setenv("OMP_NUM_THREADS", value)
+    with pytest.raises(ValueError, match="OMP_NUM_THREADS"):
+        module.configure_cpu_threads()
+
+
+def test_cpu_threads_must_actually_apply(cpu_thread_state, monkeypatch):
+    module, _ = cpu_thread_state
+    monkeypatch.setattr(module.torch, "set_num_threads", lambda value: None)
+    with pytest.raises(RuntimeError, match="actual"):
+        module.configure_cpu_threads()
+
+
+def test_cpu_thread_log_and_real_override_in_isolated_process():
+    import os
+    import subprocess
+    import sys
+
+    environment = dict(os.environ, MKL_NUM_THREADS="3", OMP_NUM_THREADS="2")
+    code = """
+import torch
+from voice_reader.model import configure_cpu_threads
+torch.set_num_threads(4)
+interop = torch.get_num_interop_threads()
+assert configure_cpu_threads() == 3
+assert torch.get_num_threads() == 3
+assert torch.get_num_interop_threads() == interop
+assert configure_cpu_threads() == 3
+"""
+    result = subprocess.run([sys.executable, "-B", "-c", code], env=environment,
+                            capture_output=True, text=True, timeout=120, check=True)
+    assert "default=4" in result.stdout
+    assert "target=3, actual=3, source=MKL_NUM_THREADS" in result.stdout
+    assert result.stdout.count("CPU intra-op threads:") == 1
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+def test_cpu_threads_set_before_model_initialization_only_on_cpu(cpu_thread_state, monkeypatch, device):
+    from types import SimpleNamespace
+
+    module, state = cpu_thread_state
+    monkeypatch.setattr(module.torch, "set_num_interop_threads",
+                        lambda value: pytest.fail("Must not change inter-op"))
+
+    def initialize(self, **kwargs):
+        assert state["threads"] == (6 if device == "cpu" else 4)
+        self.cfg = SimpleNamespace(qwen_emo_path="emotion")
+        self.qwen_emo = None
+
+    monkeypatch.setattr(module.IndexTTS2, "__init__", initialize)
+    module.ConfiguredIndexTTS(cfg_path="config", model_dir="checkpoints", device=device,
+                              runtime="standard", use_bf16=False, use_qwen_emo=False,
+                              use_cuda_kernel=False)
+
+
 @pytest.mark.parametrize("runtime", ["standard", "low-vram"])
 def test_qwen_loads_only_on_first_automatic_emotion_request(monkeypatch, runtime):
     from types import SimpleNamespace
@@ -19,6 +114,7 @@ def test_qwen_loads_only_on_first_automatic_emotion_request(monkeypatch, runtime
         self.segment_budget = 32
 
     monkeypatch.setattr(module, "select_runtime", lambda *args: runtime)
+    monkeypatch.setattr(module, "configure_cpu_threads", lambda: 4)
     monkeypatch.setattr(module.torch.cuda, "set_per_process_memory_fraction", lambda *args: None)
     monkeypatch.setattr(IndexTTS2, "__init__", initialize)
     monkeypatch.setattr(IndexTTS2, "infer", lambda self, *args, **kwargs: "audio")

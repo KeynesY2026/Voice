@@ -159,7 +159,9 @@ def build_ui(engine: SpeechEngine | InferenceService, profile_store: ProfileStor
             with gr.Row():
                 generate_button = gr.Button("生成语音", variant="primary")
                 cancel_button = gr.Button("取消生成", variant="stop")
-            audio = gr.Audio(label="生成的音频", type="filepath")
+            audio = gr.Audio(
+                label="生成的音频", type="filepath", interactive=False, show_download_button=True,
+            )
             status = gr.Markdown()
         with gr.Tab("设置"):
             device = gr.Dropdown(devices, value=engine.device, label="推理设备（下次生成生效）")

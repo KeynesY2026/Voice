@@ -133,6 +133,15 @@ def callback(app, name):
     return next(fn.fn for fn in app.fns.values() if getattr(fn.fn, "__name__", "") == name)
 
 
+def test_generated_audio_explicitly_enables_download(tmp_path):
+    app = web.build_ui(DeviceStatus(), profile_store=ProfileStore(tmp_path / "profiles"))
+    generate = next(fn for fn in app.fns.values() if fn.fn == callback(app, "generate"))
+    audio = generate.outputs[0]
+    assert isinstance(audio, gr.Audio)
+    assert audio.show_download_button is True
+    assert audio.interactive is False
+
+
 def test_profile_creation_and_rename_use_separate_names_and_chinese_labels(tmp_path):
     app = web.build_ui(DeviceStatus(), profile_store=ProfileStore(tmp_path / "profiles"))
     create = next(fn for fn in app.fns.values() if fn.fn == callback(app, "create_profile"))
