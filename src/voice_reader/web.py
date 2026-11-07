@@ -22,6 +22,57 @@ import gradio as gr
 
 logger = logging.getLogger(__name__)
 DEFAULT_PROFILE = "builtin-male"
+_WEB_OUTPUT_MAX_AGE_SECONDS = 24 * 60 * 60
+_MAX_WEB_OUTPUT_FILES = 100
+
+
+def _cleanup_web_outputs(output_dir: Path, *, now: float | None = None) -> None:
+    try:
+        if not output_dir.is_dir():
+            return
+    except OSError as error:
+        logger.warning("Could not access generated output directory %s: %s", output_dir, error)
+        return
+
+    cutoff = (time.time() if now is None else now) - _WEB_OUTPUT_MAX_AGE_SECONDS
+    files: list[tuple[float, Path]] = []
+    try:
+        for path in output_dir.glob("web-*.wav"):
+            try:
+                if path.is_file():
+                    files.append((path.stat().st_mtime, path))
+            except OSError as error:
+                logger.warning("Could not inspect generated output %s: %s", path, error)
+    except OSError as error:
+        logger.warning("Could not scan generated outputs in %s: %s", output_dir, error)
+        return
+
+    retained: list[tuple[float, Path]] = []
+    for modified, path in files:
+        if modified < cutoff:
+            try:
+                path.unlink()
+                continue
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                logger.warning("Could not remove expired output %s: %s", path, error)
+        retained.append((modified, path))
+
+    excess = len(retained) - _MAX_WEB_OUTPUT_FILES
+    if excess <= 0:
+        return
+    for _, path in sorted(retained, key=lambda item: (item[0], item[1].name)):
+        if excess <= 0:
+            break
+        try:
+            path.unlink()
+            excess -= 1
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            logger.warning("Could not remove excess output %s: %s", path, error)
+
 
 LANGUAGE_LABELS = {
     "auto": "自动", "en": "英语", "zh": "中文", "ja": "日语", "es": "西班牙语", "ar": "阿拉伯语",
@@ -122,7 +173,9 @@ def build_ui(engine: SpeechEngine | InferenceService, profile_store: ProfileStor
         ]
 
     with gr.Blocks(
-        title="本地语音生成器", analytics_enabled=False, delete_cache=(86400, 86400),
+        title="本地语音生成器", analytics_enabled=False,
+        # Gradio 5.45 wraps timedelta.seconds at 24 hours, so clean just before that.
+        delete_cache=(60, 23 * 60 * 60 + 58 * 60),
         css=".speech-examples { max-height: 460px; overflow-y: auto; padding: 0 12px; }",
     ) as app:
         gr.Markdown("# 本地语音生成器")
@@ -158,9 +211,10 @@ def build_ui(engine: SpeechEngine | InferenceService, profile_store: ProfileStor
                     gr.Markdown(_speech_tips(), elem_classes="speech-examples")
             with gr.Row():
                 generate_button = gr.Button("生成语音", variant="primary")
-                cancel_button = gr.Button("取消生成", variant="stop")
+                cancel_button = gr.Button("取消生成", variant="stop", visible=False)
             audio = gr.Audio(
-                label="生成的音频", type="filepath", interactive=False, show_download_button=True,
+                label="生成的音频", type="filepath", interactive=False,
+                show_download_button=True,
             )
             status = gr.Markdown()
         with gr.Tab("设置"):
@@ -221,6 +275,7 @@ def build_ui(engine: SpeechEngine | InferenceService, profile_store: ProfileStor
             advanced_enabled: bool = False,
             request: gr.Request = None,
         ):
+            _cleanup_web_outputs(OUTPUT_DIR)
             started = time.perf_counter()
             try:
                 if selected_profile is None or selected_profile == "default":
@@ -234,6 +289,7 @@ def build_ui(engine: SpeechEngine | InferenceService, profile_store: ProfileStor
                     owner=request.session_hash if request is not None else "local",
                     advanced=advanced_enabled,
                 )
+                _cleanup_web_outputs(OUTPUT_DIR)
             except GenerationCancelled:
                 logger.info("Speech generation cancelled.")
                 return None, "生成已取消，下次生成将重新加载模型。"
@@ -320,6 +376,15 @@ def build_ui(engine: SpeechEngine | InferenceService, profile_store: ProfileStor
             target = selected_profile if result.startswith("档案已创建：") else selected_management
             return refresh_management(target)
 
+        def start_generation():
+            return (
+                gr.update(visible=False), gr.update(visible=True),
+                gr.update(value=None),
+            )
+
+        def finish_generation():
+            return gr.update(visible=True), gr.update(visible=False)
+
         def cancel_generation(request: gr.Request = None):
             cancelled = engine.cancel(request.session_hash if request is not None else "local")
             return ("生成已取消，下次生成将重新加载模型。" if cancelled
@@ -358,12 +423,22 @@ def build_ui(engine: SpeechEngine | InferenceService, profile_store: ProfileStor
             triggers=[language.change, device.change, advanced.change], fn=summarize_settings,
             inputs=(language, device, advanced), outputs=settings_summary, queue=False,
         )
-        generation = generate_button.click(
+        generation_start = generate_button.click(
+            start_generation,
+            outputs=(generate_button, cancel_button, audio),
+            queue=False,
+        )
+        generation = generation_start.then(
             generate, inputs=controls, outputs=(audio, status),
             concurrency_id="voice", concurrency_limit=1,
         )
+        generation.then(
+            finish_generation, outputs=(generate_button, cancel_button), queue=False,
+        )
         cancel_button.click(
             cancel_generation, outputs=status, queue=False, cancels=[generation],
+        ).then(
+            finish_generation, outputs=(generate_button, cancel_button), queue=False,
         )
         gr.on(
             triggers=[control.change for control in controls], fn=remember_inputs,
@@ -423,6 +498,7 @@ def launch(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--runtime", choices=("auto", "standard", "low-vram"), default="auto")
     args = parser.parse_args(argv)
+    _cleanup_web_outputs(OUTPUT_DIR)
     store = ProfileStore()
     engine = SpeechEngine(device=args.device, profile_store=store, runtime=args.runtime)
     try:

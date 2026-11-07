@@ -1,6 +1,10 @@
+import asyncio
+import os
+import time
 from pathlib import Path
 
 import gradio as gr
+from fastapi.testclient import TestClient
 from gradio.data_classes import FileData
 
 from voice_reader import web
@@ -56,7 +60,9 @@ def test_ui_callback_uses_shared_engine_and_manual_emotion(tmp_path, monkeypatch
 
     clock = iter((10.0, 12.375))
     monkeypatch.setattr(web.time, "perf_counter", lambda: next(clock))
-    audio_path, status = callback("That is great.", "manual", "happy", 0.7, advanced_enabled=True)
+    audio_path, status = callback(
+        "That is great.", "manual", "happy", 0.7, advanced_enabled=True,
+    )
 
     assert Path(audio_path).read_bytes() == b"wav"
     assert "本轮推理总用时：2.38 秒" in capsys.readouterr().out
@@ -133,13 +139,153 @@ def callback(app, name):
     return next(fn.fn for fn in app.fns.values() if getattr(fn.fn, "__name__", "") == name)
 
 
-def test_generated_audio_explicitly_enables_download(tmp_path):
-    app = web.build_ui(DeviceStatus(), profile_store=ProfileStore(tmp_path / "profiles"))
+def test_web_cache_uses_gradio_native_cleanup():
+    app = web.build_ui(DeviceStatus())
+
+    assert app.delete_cache == (60, 23 * 60 * 60 + 58 * 60)
+
+
+def test_cleanup_expires_web_outputs_after_24_hours_and_preserves_other_files(tmp_path):
+    now = 2_000_000_000
+    expired = tmp_path / "web-expired.wav"
+    boundary = tmp_path / "web-boundary.wav"
+    cli_output = tmp_path / "speech.wav"
+    for path in (expired, boundary, cli_output):
+        path.write_bytes(b"audio")
+    os.utime(expired, (now - 24 * 60 * 60 - 1,) * 2)
+    os.utime(boundary, (now - 24 * 60 * 60,) * 2)
+    os.utime(cli_output, (now - 30 * 24 * 60 * 60,) * 2)
+
+    web._cleanup_web_outputs(tmp_path, now=now)
+
+    assert not expired.exists()
+    assert boundary.exists()
+    assert cli_output.exists()
+
+
+def test_cleanup_limits_web_outputs_to_100_oldest_first(tmp_path):
+    now = 2_000_000_000
+    outputs = []
+    for index in range(101):
+        path = tmp_path / f"web-{index:03}.wav"
+        path.write_bytes(b"audio")
+        modified = now - (100 - index)
+        os.utime(path, (modified, modified))
+        outputs.append(path)
+
+    web._cleanup_web_outputs(tmp_path, now=now)
+
+    assert len(list(tmp_path.glob("web-*.wav"))) == 100
+    assert not outputs[0].exists()
+    assert all(path.exists() for path in outputs[1:])
+
+
+def test_generated_audio_cleanup_runs_while_web_is_active(tmp_path, monkeypatch):
+    class FakeSpeechEngine(DeviceStatus):
+        def synthesize(self, text, output_path, emotion, **kwargs):
+            Path(output_path).write_bytes(b"generated wav")
+            return Path(output_path)
+
+    now = time.time()
+    expired = tmp_path / "web-expired.wav"
+    expired.write_bytes(b"old audio")
+    old_time = now - 24 * 60 * 60 - 1
+    os.utime(expired, (old_time, old_time))
+    existing_outputs = []
+    for index in range(100):
+        path = tmp_path / f"web-existing-{index:03}.wav"
+        path.write_bytes(b"existing audio")
+        modified = now - (100 - index)
+        os.utime(path, (modified, modified))
+        existing_outputs.append(path)
+    monkeypatch.setattr(web, "OUTPUT_DIR", tmp_path)
+    app = web.build_ui(FakeSpeechEngine())
+
+    output, status = callback(app, "generate")("Test.", "manual", "happy", 0.6)
+
+    assert "生成完成" in status
+    assert not expired.exists()
+    assert not existing_outputs[0].exists()
+    assert all(path.exists() for path in existing_outputs[1:])
+    assert len(list(tmp_path.glob("web-*.wav"))) == 100
+    assert Path(output).exists()
+
+
+def test_generated_audio_keeps_the_audio_player_download_button(tmp_path, monkeypatch):
+    class FakeSpeechEngine(DeviceStatus):
+        def synthesize(self, text, output_path, emotion, **kwargs):
+            Path(output_path).write_bytes(b"generated wav")
+            return Path(output_path)
+
+    monkeypatch.setattr(web, "OUTPUT_DIR", tmp_path)
+    app = web.build_ui(FakeSpeechEngine())
     generate = next(fn for fn in app.fns.values() if fn.fn == callback(app, "generate"))
-    audio = generate.outputs[0]
-    assert isinstance(audio, gr.Audio)
+    audio = next(
+        block for block in app.blocks.values()
+        if isinstance(block, gr.Audio) and block.label == "生成的音频"
+    )
+
+    assert audio in generate.outputs
     assert audio.show_download_button is True
-    assert audio.interactive is False
+    audio_path, status = callback(app, "generate")(
+        "Test.", "manual", "happy", 0.6,
+    )
+
+    assert "生成完成" in status
+    assert Path(audio_path).read_bytes() == b"generated wav"
+
+    result = asyncio.run(app.process_api(
+        generate,
+        inputs=["Test.", "manual", "happy", 0.6, "builtin-male", "auto", "cpu", False],
+    ))
+    audio_file = result["data"][0]
+    assert audio_file["orig_name"].endswith(".wav")
+    with TestClient(app.app) as client:
+        response = client.get(audio_file["url"])
+    assert response.status_code == 200
+    assert response.content == b"generated wav"
+
+
+def test_generation_and_cancel_buttons_toggle_exclusive_visibility():
+    app = web.build_ui(DeviceStatus())
+    generate_button = next(
+        block for block in app.blocks.values()
+        if isinstance(block, gr.Button) and block.value == "生成语音"
+    )
+    cancel_button = next(
+        block for block in app.blocks.values()
+        if isinstance(block, gr.Button) and block.value == "取消生成"
+    )
+
+    assert generate_button.visible is True
+    assert cancel_button.visible is False
+    start = callback(app, "start_generation")
+    finish = callback(app, "finish_generation")
+    starting = start()
+    finished = finish()
+    assert (starting[0]["visible"], starting[1]["visible"]) == (False, True)
+    assert starting[2]["value"] is None
+    assert (finished[0]["visible"], finished[1]["visible"]) == (True, False)
+
+    dependencies = app.config["dependencies"]
+    by_name = {
+        app.fns[dependency["id"]].fn.__name__: dependency
+        for dependency in dependencies if dependency["backend_fn"]
+    }
+    generation = by_name["generate"]
+    assert generation["trigger_after"] == by_name["start_generation"]["id"]
+    finish_triggers = {
+        dependency["trigger_after"] for dependency in dependencies
+        if dependency["backend_fn"]
+        and app.fns[dependency["id"]].fn.__name__ == "finish_generation"
+    }
+    assert finish_triggers == {generation["id"], by_name["cancel_generation"]["id"]}
+    cancel_dependency = next(
+        dependency for dependency in dependencies
+        if dependency["types"]["cancel"]
+        and (cancel_button._id, "click") in dependency["targets"]
+    )
+    assert generation["id"] in cancel_dependency["cancels"]
 
 
 def test_profile_creation_and_rename_use_separate_names_and_chinese_labels(tmp_path):
